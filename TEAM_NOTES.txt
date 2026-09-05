@@ -1,0 +1,82 @@
+================================================================================
+SIH26143 — Shared Team Notes & Technical Roadmap
+================================================================================
+
+1. Purpose
+--------------------------------------------------------------------------------
+The purpose of the SIH26143 project is to provide an end-to-end automated framework for detecting oil spills using Sentinel-1 SAR satellite imagery, estimating their spatio-temporal origin using backward ocean drift modeling, and attributing responsibility by ranking candidate vessels based on historical AIS trajectories.
+
+2. Team Responsibilities
+--------------------------------------------------------------------------------
+- Rhishabh (Satellite / Computer Vision):
+  * Preprocessing of Sentinel-1 SAR GRD/SLC imagery (speckle filtering, terrain correction, calibration).
+  * Deep learning model architectures for oil spill segmentation.
+  * Training, evaluation, and inference pipelines.
+  * Geometrical property extraction (spill centroid, perimeter, area, orientation, major/minor axes).
+
+- Shashwat (Ocean / Drift):
+  * Forcing data preparation (ocean currents, sea surface winds, wave dynamics).
+  * Implementation and tuning of backward drift / hindcast simulation.
+  * Calculation of probable origin regions (heatmaps/polygons) and time windows.
+
+- Divyansh (AIS / Analytics):
+  * AIS message parsing, cleaning, and trajectory reconstruction.
+  * Spatial-temporal query engine for filtering vessels near estimated origin windows.
+  * Vessel trajectory matching and probabilistic ranking algorithm development.
+
+- Shubh (Backend / Dashboard):
+  * System architecture, REST/gRPC API backend design.
+  * Orchestrating execution across satellite -> drift -> AIS modules.
+  * Interactive web dashboard for visualizing SAR layers, drift contours, AIS tracks, and attribution reports.
+  * System integration, deployment, and contract enforcement.
+
+3. System Pipeline
+--------------------------------------------------------------------------------
+Sentinel-1 SAR
+  -> Oil-Spill Segmentation (Deep Learning)
+  -> Spill Geometry (Geospatial Analysis)
+  -> Ocean/Wind Data (Environmental Forcing)
+  -> Backward Drift/Hindcast (Particle Tracking)
+  -> Probable Source Region/Time Window (Probability Polygon)
+  -> Historical AIS Correlation (Spatio-Temporal Query)
+  -> Ranked Potentially Associated Vessel (Attribution Score)
+  -> Dashboard (Visualization & Reporting)
+
+4. Module Ownership
+--------------------------------------------------------------------------------
+- /satellite : Rhishabh
+- /drift     : Shashwat
+- /ais       : Divyansh
+- /backend   : Shubh
+- /dashboard : Shubh
+- /shared    : All (Managed by Shubh)
+- /integration: All Lead
+
+5. Integration Contracts
+--------------------------------------------------------------------------------
+- Satellite -> Drift Interface:
+  JSON schema providing spill geometry (coordinates, timestamp, polygon geojson, centroid, area, confidence).
+- Drift -> AIS Interface:
+  JSON schema containing origin probability distribution (polygon bounding box/grid, estimated time window start/end).
+- AIS -> Backend/Dashboard Interface:
+  JSON schema containing ranked candidate vessels (MMSI, vessel name, distance-to-origin metric, temporal alignment score, overall confidence score).
+
+6. Technical Decisions
+--------------------------------------------------------------------------------
+- Version Control: Feature branch workflow targeting `main` via PR code reviews.
+- Schema Definition: Shared JSON/Pydantic schemas residing in `shared/schemas/`.
+- Modular Isolation: Each subfolder (/satellite, /drift, /ais) maintains isolated logic to allow independent development and testing.
+
+7. Dataset Notes
+--------------------------------------------------------------------------------
+- Satellite Data: Copernicus Sentinel-1 SAR imagery (C-band, IW mode).
+- Oceanographic Data: Surface current and wind field data (e.g. ERA5 reanalysis, HYCOM ocean currents).
+- AIS Data: Historical AIS message logs containing timestamped MMSI coordinates, SOG, COG.
+- Note: Avoid committing large dataset files directly to Git repository. Store raw data locally in `data/` following `data/README.md`.
+
+8. Open Questions
+--------------------------------------------------------------------------------
+- Target resolution for backward drift simulation grid.
+- Computational strategy for high-density AIS trajectory spatial indexing (e.g. R-tree vs PostGIS vs DuckDB).
+- Calibration requirements for SAR wind-shear vs actual oil slick damping signatures.
+================================================================================

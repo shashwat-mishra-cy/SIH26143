@@ -1,0 +1,25 @@
+# Project SIH26143 Dependencies
+# Note: Dependencies will be added by module owners as needed.
+
+# Shared Dependencies
+pydantic>=2.0.0
+
+# Satellite / CV Dependencies (Rhishabh)
+# torch
+# torchvision
+# rasterio
+# geopandas
+
+# Ocean / Drift Dependencies (Shashwat)
+# opendrift
+# netcdf4
+# xarray
+
+# AIS / Analytics Dependencies (Divyansh)
+# pandas
+# numpy
+# shapely
+
+# Backend & Dashboard Dependencies (Shubh)
+# fastapi
+# uvicorn
