@@ -8,9 +8,9 @@ from datetime import datetime, timedelta
 import json
 from pathlib import Path
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 import random
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon, MultiPolygon
 
 # Ensure project root is in sys.path when executed as a direct script
 project_root = Path(__file__).resolve().parents[2]
@@ -58,11 +58,52 @@ def extract_trajectories(result: Any) -> Dict[str, List[List[Dict[str, Any]]]]:
 
     return {"trajectories": trajectories}
 
+def sample_points_in_geometry(
+    geometry: Union[Polygon, MultiPolygon],
+    number_of_points: int,
+    seed: int = 42,
+) -> Tuple[List[float], List[float]]:
+    """Sample random particle starting locations inside a Shapely Polygon or MultiPolygon.
+
+    Args:
+        geometry: Shapely Polygon or MultiPolygon object representing spill extent.
+        number_of_points: Number of particle locations to generate.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        Tuple of (longitude list, latitude list).
+    """
+    if not isinstance(geometry, (Polygon, MultiPolygon)):
+        raise TypeError("geometry must be a Shapely Polygon or MultiPolygon object.")
+
+    if not geometry.is_valid:
+        raise ValueError("Provided geometry is invalid.")
+
+    min_lon, min_lat, max_lon, max_lat = geometry.bounds
+
+    rng = random.Random(seed)
+
+    longitudes: List[float] = []
+    latitudes: List[float] = []
+
+    while len(longitudes) < number_of_points:
+        lon = rng.uniform(min_lon, max_lon)
+        lat = rng.uniform(min_lat, max_lat)
+
+        point = Point(lon, lat)
+
+        if geometry.contains(point):
+            longitudes.append(lon)
+            latitudes.append(lat)
+
+    return longitudes, latitudes
+
+
 def sample_points_in_polygon(
     polygon_coordinates: List[List[float]],
     number_of_points: int,
     seed: int = 42,
-) -> tuple[list[float], list[float]]:
+) -> Tuple[List[float], List[float]]:
     """Sample random particle starting locations inside a spill polygon.
 
     Args:
@@ -73,30 +114,8 @@ def sample_points_in_polygon(
     Returns:
         Tuple of longitude list and latitude list.
     """
-
     polygon = Polygon(polygon_coordinates)
-
-    if not polygon.is_valid:
-        raise ValueError("Spill polygon is invalid.")
-
-    min_lon, min_lat, max_lon, max_lat = polygon.bounds
-
-    rng = random.Random(seed)
-
-    longitudes = []
-    latitudes = []
-
-    while len(longitudes) < number_of_points:
-        lon = rng.uniform(min_lon, max_lon)
-        lat = rng.uniform(min_lat, max_lat)
-
-        point = Point(lon, lat)
-
-        if polygon.contains(point):
-            longitudes.append(lon)
-            latitudes.append(lat)
-
-    return longitudes, latitudes
+    return sample_points_in_geometry(polygon, number_of_points, seed=seed)
 
 
 def run_backward_simulation(
@@ -135,24 +154,35 @@ def run_backward_simulation(
     return extract_trajectories(o.result)
 
 def run_polygon_backward_simulation(
-    polygon_coordinates: List[List[float]],
+    polygon_coordinates: Union[List[List[float]], Polygon, MultiPolygon],
     detection_time: datetime,
     duration_hours: float = 6.0,
     number_of_particles: int = 500,
     time_step_minutes: float = 10.0,
-    ) -> Dict[str, List[List[Dict[str, Any]]]]:
+    horizontal_diffusivity: float = 1.0,
+) -> Dict[str, List[List[Dict[str, Any]]]]:
 
     env_loader = EnvironmentalDataLoader()
     readers = env_loader.get_opendrift_readers()
 
-    longitudes, latitudes = sample_points_in_polygon(
-        polygon_coordinates,
+    if isinstance(polygon_coordinates, (Polygon, MultiPolygon)):
+        geometry = polygon_coordinates
+    else:
+        geometry = Polygon(polygon_coordinates)
+
+    longitudes, latitudes = sample_points_in_geometry(
+        geometry,
         number_of_particles,
     )
 
     o = OceanDrift(loglevel=20)
 
     o.add_reader(readers)
+
+    o.set_config(
+        'environment:constant:horizontal_diffusivity',
+        horizontal_diffusivity,
+    )
 
     o.seed_elements(
         lon=longitudes,
