@@ -6,7 +6,7 @@ from satellite.training.metrics import segmentation_metrics
 from satellite.inference.predict import predict_mask
 
 
-def main():
+def test_satellite_pipeline():
     device = torch.device(
         "cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -52,7 +52,3 @@ def main():
     print("Metrics:", metrics)
     print("Probability:", result["probability"].shape)
     print("Mask:", result["mask"].shape)
-
-
-if __name__ == "__main__":
-    main()

@@ -5,7 +5,7 @@ from satellite.geometry.spill_geometry import (
 )
 
 
-def main():
+def test_geometry():
 
     # Create a synthetic image containing TWO
     # disconnected spill regions.
@@ -37,7 +37,3 @@ def main():
             if component["polygon_pixel"]
             else 0
         )
-
-
-if __name__ == "__main__":
-    main()
