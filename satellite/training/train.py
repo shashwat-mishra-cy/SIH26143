@@ -88,6 +88,7 @@ def validate(
     model.eval()
 
     total_loss = 0.0
+
     total_metrics = {
         "dice": 0.0,
         "iou": 0.0,
@@ -143,20 +144,38 @@ def main():
 
     train_ids, validation_ids = build_scene_splits()
 
+    # ---------------------------------------------------------
+    # Training dataset
+    # ---------------------------------------------------------
+    # Experiment 1:
+    # - 32 patches per scene instead of 16
+    # - overlapping patch sampling handled by dataset.py
+    # - geometric augmentation enabled
+    # ---------------------------------------------------------
+
     train_dataset = SARPatchDataset(
         categories=CATEGORIES,
         scene_ids=train_ids,
         patch_size=256,
-        patches_per_image=16,
+        patches_per_image=32,
         positive_fraction=0.5,
+        augment=True,
     )
+
+    # ---------------------------------------------------------
+    # Validation dataset
+    # ---------------------------------------------------------
+    # Validation remains unaugmented so that we evaluate the
+    # model on the original validation data.
+    # ---------------------------------------------------------
 
     validation_dataset = SARPatchDataset(
         categories=CATEGORIES,
         scene_ids=validation_ids,
         patch_size=256,
-        patches_per_image=16,
+        patches_per_image=32,
         positive_fraction=0.5,
+        augment=False,
     )
 
     train_loader = DataLoader(
@@ -199,7 +218,9 @@ def main():
 
     best_dice = -1.0
 
-    epochs = 10
+    # Experiment 1:
+    # Train for 20 epochs instead of the 10-epoch baseline.
+    epochs = 20
 
     print("\nStarting training...\n")
 
@@ -236,17 +257,17 @@ def main():
 
             torch.save(
                 model.state_dict(),
-                "best_unet.pth",
+                "best_unet_augmented.pth",
             )
 
             print(
-                f"  -> Saved best model "
+                f"  -> Saved best augmented model "
                 f"(Dice={best_dice:.4f})"
             )
 
     print("\nTraining complete.")
     print(f"Best validation Dice: {best_dice:.4f}")
-    print("Model saved as: best_unet.pth")
+    print("Model saved as: best_unet_augmented.pth")
 
 
 if __name__ == "__main__":

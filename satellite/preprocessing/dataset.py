@@ -19,6 +19,8 @@ class SARPatchDataset(Dataset):
 
     scene_ids can be supplied to ensure that train and validation
     contain completely separate SAR scenes.
+
+    Augmentation is applied only when augment=True.
     """
 
     def __init__(
@@ -26,9 +28,10 @@ class SARPatchDataset(Dataset):
         categories,
         scene_ids=None,
         patch_size=256,
-        patches_per_image=16,
+        patches_per_image=32,
         positive_fraction=0.5,
         min_positive_pixels=20,
+        augment=False,
     ):
         self.categories = categories
         self.scene_ids = scene_ids
@@ -37,6 +40,7 @@ class SARPatchDataset(Dataset):
         self.patches_per_image = patches_per_image
         self.positive_fraction = positive_fraction
         self.min_positive_pixels = min_positive_pixels
+        self.augment = augment
 
         self.samples = self._build_samples()
 
@@ -91,7 +95,10 @@ class SARPatchDataset(Dataset):
                 positive_positions = []
                 negative_positions = []
 
-                stride = self.patch_size
+                # Use overlapping candidate patches.
+                # This gives the model more opportunities to see
+                # spill boundaries and small oil regions.
+                stride = self.patch_size // 2
 
                 for y in range(
                     0,
@@ -108,9 +115,7 @@ class SARPatchDataset(Dataset):
                             x:x + self.patch_size,
                         ]
 
-                        positive_pixels = int(
-                            patch_mask.sum()
-                        )
+                        positive_pixels = int(patch_mask.sum())
 
                         if positive_pixels >= self.min_positive_pixels:
                             positive_positions.append((x, y))
@@ -246,8 +251,51 @@ class SARPatchDataset(Dataset):
             x:x + self.patch_size,
         ]
 
-        image = torch.from_numpy(image.copy()).float()
-        mask = torch.from_numpy(mask.copy()).float().unsqueeze(0)
+        # ---------------------------------------------------------
+        # Training augmentation
+        # ---------------------------------------------------------
+        # SAR images and their masks must undergo the SAME
+        # geometric transformation.
+        #
+        # Validation datasets use augment=False, so validation
+        # remains completely unchanged.
+        # ---------------------------------------------------------
+
+        if self.augment:
+
+            # Horizontal flip
+            if np.random.random() < 0.5:
+                image = np.flip(image, axis=2)
+                mask = np.flip(mask, axis=1)
+
+            # Vertical flip
+            if np.random.random() < 0.5:
+                image = np.flip(image, axis=1)
+                mask = np.flip(mask, axis=0)
+
+            # Random rotation: 0, 90, 180, or 270 degrees
+            rotation = np.random.randint(0, 4)
+
+            if rotation > 0:
+                image = np.rot90(
+                    image,
+                    k=rotation,
+                    axes=(1, 2),
+                )
+
+                mask = np.rot90(
+                    mask,
+                    k=rotation,
+                    axes=(0, 1),
+                )
+
+        # np.flip / np.rot90 can create arrays with negative strides.
+        # copy() guarantees that PyTorch receives a safe contiguous array.
+        image = np.ascontiguousarray(image)
+        mask = np.ascontiguousarray(mask)
+
+        image = torch.from_numpy(image).float()
+        mask = torch.from_numpy(mask).float().unsqueeze(0)
 
         return {
             "image": image,

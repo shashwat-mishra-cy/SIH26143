@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Trained model checkpoints
+*.pth
+*.pt
+
+# Generated inference artifacts
+*.npy
+
+# Generated visualizations
+*.png
+
+# Generated demo outputs
+spill_geometry_*.json
+spill_result_*.json
+p4_contract.txt
