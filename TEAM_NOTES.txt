@@ -8,26 +8,38 @@ The purpose of the SIH26143 project is to provide an end-to-end automated framew
 
 2. Team Responsibilities
 --------------------------------------------------------------------------------
-- Rhishabh (Satellite / Computer Vision):
+- Rhishabh (Satellite / Computer Vision - P1):
   * Preprocessing of Sentinel-1 SAR GRD/SLC imagery (speckle filtering, terrain correction, calibration).
   * Deep learning model architectures for oil spill segmentation.
   * Training, evaluation, and inference pipelines.
-  * Geometrical property extraction (spill centroid, perimeter, area, orientation, major/minor axes).
+  * Geometrical property extraction (spill centroid, perimeter, area, orientation, major/minor axes, GeoJSON Polygon/MultiPolygon).
+  * Providing valid observation/detection timestamp from satellite metadata.
 
-- Shashwat (Ocean / Drift):
-  * Forcing data preparation (ocean currents, sea surface winds, wave dynamics).
-  * Implementation and tuning of backward drift / hindcast simulation.
-  * Calculation of probable origin regions (heatmaps/polygons) and time windows.
+- Shashwat (Ocean / Drift - P2):
+  * Receiving spill geometry (Polygon / MultiPolygon) and valid observation/detection timestamp from P1.
+  * Running backward drift reconstruction using OpenDrift with surface wind forcing and ocean-current forcing.
+  * Supporting irregular Polygon and MultiPolygon spill geometry inputs.
+  * Running a stochastic ensemble of particles rather than assuming one exact deterministic trajectory.
+  * Applying configurable horizontal diffusion.
+  * Using Kernel Density Estimation (KDE) and 50% / 90% Highest Density Region (HDR) analysis to estimate probable source-support regions.
+  * Performing temporal source-support diagnostic analysis across hindcast timesteps.
+  * Producing a candidate source-time estimate only when evidence supports one, returning explicit indeterminate statuses (`indeterminate_flat_signal`, `indeterminate_boundary_minimum`, `indeterminate_conflicting_minima`, `insufficient_temporal_data`) when evidence is insufficient or conflicting.
+  * Providing structured P2 -> P3 handoff (`DriftSourceResult`).
+  * Providing particle trajectory data (particle ID, timestamp, latitude, longitude at 10-minute resolution) that P4 can visualize (downsamplable to 30-minute intervals).
+  * Scientifically cautious terminology: "probable source region", "source-support region", "possible backward trajectories", "potential association", "uncertainty". P2 outputs do NOT claim an exact source point, exact release time, or proof of vessel causality.
+  * Timestamp Rule: Must not invent or assume a satellite timestamp. If no valid timestamp is available, time-dependent source reconstruction and temporal AIS correlation are limited/unavailable, and P4 should clearly indicate timestamp unavailability.
 
-- Divyansh (AIS / Analytics):
-  * AIS message parsing, cleaning, and trajectory reconstruction.
-  * Spatial-temporal query engine for filtering vessels near estimated origin windows.
-  * Vessel trajectory matching and probabilistic ranking algorithm development.
+- Divyansh (AIS / Analytics - P3):
+  * AIS message parsing, cleaning, trajectory reconstruction, and spatial-temporal candidate vessel indexing.
+  * Consuming P2 -> P3 `DriftSourceResult` handoff schema (version 1.0) from `drift/simulation/handoff.py`.
+  * Spatial-temporal correlation between vessel trajectories and estimated source-support regions/time windows.
+  * Probabilistic candidate vessel ranking algorithm.
 
-- Shubh (Backend / Dashboard):
+- Shubh (Backend / Dashboard - P4):
   * System architecture, REST/gRPC API backend design.
   * Orchestrating execution across satellite -> drift -> AIS modules.
-  * Interactive web dashboard for visualizing SAR layers, drift contours, AIS tracks, and attribution reports.
+  * Interactive web dashboard for visualizing SAR layers, drift contours, AIS tracks, particle ensemble trajectories (downsamplable from 10-min to 30-min), and attribution reports.
+  * Indicating clearly when satellite observation timestamp is unavailable.
   * System integration, deployment, and contract enforcement.
 
 3. System Pipeline
@@ -54,17 +66,20 @@ Sentinel-1 SAR
 
 5. Integration Contracts
 --------------------------------------------------------------------------------
-- Satellite -> Drift Interface:
-  JSON schema providing spill geometry (coordinates, timestamp, polygon geojson, centroid, area, confidence).
-- Drift -> AIS Interface:
-  JSON schema containing origin probability distribution (polygon bounding box/grid, estimated time window start/end).
-- AIS -> Backend/Dashboard Interface:
+- Satellite (P1) -> Drift (P2) Interface:
+  Spill geometry (Polygon / MultiPolygon coordinates, centroid, area, confidence) and valid observation timestamp from satellite metadata.
+- Drift (P2) -> AIS (P3) Interface:
+  Implemented in `drift/simulation/handoff.py` (`DriftSourceResult`). Contains source-support geometry (50% / 90% HDR Polygons or MultiPolygons preserved without simplification), source-time candidate (or null when indeterminate), estimator status, HDR areas, ensemble particle count, and model parameters.
+  *Note: Before introducing a project-wide shared schema (e.g. `shared/schemas/contracts.py`), the team should agree on the final P1->P2->P3 contract.*
+- Drift (P2) -> Dashboard (P4) Visualization Interface:
+  Particle trajectory data (particle ID, timestamp, latitude, longitude) produced at 10-minute intervals. P4 can downsample to e.g. 30-minute intervals for UI rendering.
+- AIS (P3) -> Backend/Dashboard (P4) Interface:
   JSON schema containing ranked candidate vessels (MMSI, vessel name, distance-to-origin metric, temporal alignment score, overall confidence score).
 
 6. Technical Decisions
 --------------------------------------------------------------------------------
 - Version Control: Feature branch workflow targeting `main` via PR code reviews.
-- Schema Definition: Shared JSON/Pydantic schemas residing in `shared/schemas/`.
+- Schema Definition: Validated P2->P3 contract currently implemented in `drift/simulation/handoff.py`.
 - Modular Isolation: Each subfolder (/satellite, /drift, /ais) maintains isolated logic to allow independent development and testing.
 
 7. Dataset Notes
