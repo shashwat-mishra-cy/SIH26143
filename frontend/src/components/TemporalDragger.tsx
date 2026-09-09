@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import type { TimestampProvenance } from '../types/temporal'
 
 interface TemporalDraggerProps {
@@ -36,6 +36,8 @@ export default function TemporalDragger({
 }: TemporalDraggerProps) {
   const [showTimeEditor, setShowTimeEditor] = useState(false)
   const [customTimeInput, setCustomTimeInput] = useState('')
+  const [isPointerDragging, setIsPointerDragging] = useState(false)
+  const trackRef = useRef<HTMLDivElement>(null)
 
   const totalDurationMs = Math.max(1, detectionTimeMs - startTimeMs)
   // Value from 0 (earliest) to 1000 (detection time)
@@ -70,9 +72,50 @@ export default function TemporalDragger({
     }
   }, [detectionTimeMs])
 
+  function updateTimeFromClientX(clientX: number) {
+    if (!trackRef.current) return
+    const rect = trackRef.current.getBoundingClientRect()
+    if (rect.width <= 0) return
+    const fraction = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
+    const newTimeMs = Math.round(startTimeMs + fraction * totalDurationMs)
+    onTimeChange(newTimeMs)
+  }
+
+  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // ignore
+    }
+    setIsPointerDragging(true)
+    updateTimeFromClientX(e.clientX)
+  }
+
+  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!isPointerDragging) return
+    e.stopPropagation()
+    e.preventDefault()
+    updateTimeFromClientX(e.clientX)
+  }
+
+  function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (!isPointerDragging) return
+    e.stopPropagation()
+    e.preventDefault()
+    setIsPointerDragging(false)
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      // ignore
+    }
+  }
+
   function handleSliderChange(e: React.ChangeEvent<HTMLInputElement>) {
     const val = parseInt(e.target.value, 10)
-    const newTimeMs = startTimeMs + (val / 1000) * totalDurationMs
+    const newTimeMs = Math.round(startTimeMs + (val / 1000) * totalDurationMs)
     onTimeChange(newTimeMs)
   }
 
@@ -100,7 +143,14 @@ export default function TemporalDragger({
   }
 
   return (
-    <div className="temporal-dragger-shell" aria-label="Interactive Temporal Reconstruction Timeline">
+    <div
+      className="temporal-dragger-shell"
+      aria-label="Interactive Temporal Reconstruction Timeline"
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
       <div className="dragger-main-row">
         {/* Play / Step Buttons */}
         <div className="dragger-transport-controls">
@@ -161,21 +211,44 @@ export default function TemporalDragger({
             </span>
           </div>
 
-          <div className="dragger-slider-wrapper">
+          <div
+            ref={trackRef}
+            className={`dragger-slider-wrapper ${isPointerDragging ? 'active-dragging' : ''}`}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            onMouseDown={(e) => {
+              e.stopPropagation()
+              e.preventDefault()
+            }}
+          >
+            <div className="dragger-track-rail" />
+            <div
+              className="dragger-fill-bar"
+              style={{ width: `${sliderValue / 10}%` }}
+            />
+            <div
+              className="dragger-anchor-marker detection-marker"
+              title="Spill Detection Point (Rightmost)"
+            />
+            {/* Custom Interactive Dragger Thumb */}
+            <div
+              className={`dragger-custom-thumb ${isPointerDragging ? 'dragging' : ''}`}
+              style={{ left: `${sliderValue / 10}%` }}
+              title="Drag backward or forward in time"
+            />
             <input
               type="range"
               min="0"
               max="1000"
               value={sliderValue}
               onChange={handleSliderChange}
-              className="dragger-range-slider"
+              onInput={handleSliderChange}
+              className="dragger-range-slider-hidden"
               aria-label="Investigation timeline backward dragger"
+              tabIndex={0}
             />
-            <div
-              className="dragger-fill-bar"
-              style={{ width: `${sliderValue / 10}%` }}
-            />
-            <div className="dragger-anchor-marker detection-marker" title="Spill Detection Point (Rightmost)" />
           </div>
         </div>
 

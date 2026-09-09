@@ -4,7 +4,12 @@
  */
 export default function MapLegend() {
   return (
-    <div className="map-legend" aria-label="Map legend">
+    <div
+      className="map-legend"
+      aria-label="Map legend"
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
       <div className="legend-header">Legend</div>
       <div className="legend-item">
         <span className="legend-swatch swatch-spill" aria-hidden="true" />

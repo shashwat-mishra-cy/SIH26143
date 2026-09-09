@@ -31,7 +31,12 @@ export default function LayerControl({
   onToggleSeamarks,
 }: LayerControlProps) {
   return (
-    <div className="layer-control" aria-label="Map layers">
+    <div
+      className="layer-control"
+      aria-label="Map layers"
+      onMouseDown={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
       <div className="layer-control-header">Intelligence Layers</div>
       <label className="layer-control-item">
         <input
