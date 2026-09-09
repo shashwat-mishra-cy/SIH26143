@@ -7,17 +7,27 @@ import rasterio
 
 from satellite.model.unet import UNet
 from satellite.preprocessing.sar import normalize_sar
+from satellite.geometry.geographic_geometry import (
+    extract_geographic_geometry,
+)
+from satellite.integration.spill_result import (
+    build_spill_result,
+    save_spill_result,
+)
 
 
 PATCH_SIZE = 256
 BATCH_SIZE = 16
+
+# Experiment 1 operating threshold
 THRESHOLD = 0.30
+MIN_PIXELS = 50
 
 MODEL_PATH = Path("best_unet_augmented.pth")
+OUTPUT_DIR = Path("real_scene_output")
 
 
 def load_model(model_path, device):
-
     model = UNet(
         in_channels=2,
         out_channels=1,
@@ -30,7 +40,6 @@ def load_model(model_path, device):
     )
 
     model.load_state_dict(checkpoint)
-
     model.to(device)
     model.eval()
 
@@ -38,9 +47,6 @@ def load_model(model_path, device):
 
 
 def load_scene(image_path):
-
-    image_path = Path(image_path)
-
     with rasterio.open(image_path) as src:
 
         image = src.read().astype(np.float32)
@@ -56,43 +62,22 @@ def load_scene(image_path):
         }
 
     if image.shape[0] != 2:
-
         raise ValueError(
-            f"Expected exactly 2 bands "
-            f"(VV/VH), got {image.shape[0]}"
+            f"Expected VV/VH two-band SAR image. "
+            f"Got {image.shape[0]} bands."
         )
 
     if metadata["crs"] is None:
-
         raise ValueError(
-            "This image has no CRS/geographic "
-            "reference information."
+            "Input GeoTIFF has no CRS. "
+            "A georeferenced Sentinel-1 GeoTIFF is required."
         )
 
     return image, metadata
 
 
-def run_full_scene(
-    model,
-    image,
-    device,
-):
-
+def run_full_scene(model, image, device):
     _, height, width = image.shape
-
-    if height % PATCH_SIZE != 0:
-
-        raise ValueError(
-            f"Scene height {height} is not divisible "
-            f"by {PATCH_SIZE}"
-        )
-
-    if width % PATCH_SIZE != 0:
-
-        raise ValueError(
-            f"Scene width {width} is not divisible "
-            f"by {PATCH_SIZE}"
-        )
 
     probability_map = np.zeros(
         (height, width),
@@ -102,34 +87,42 @@ def run_full_scene(
     patches = []
     positions = []
 
-    for y in range(
-        0,
-        height,
-        PATCH_SIZE,
-    ):
+    # Process arbitrary scene sizes.
+    # Edge patches are zero-padded to 256 x 256.
+    for y in range(0, height, PATCH_SIZE):
 
-        for x in range(
-            0,
-            width,
-            PATCH_SIZE,
-        ):
+        for x in range(0, width, PATCH_SIZE):
 
             patch = image[
                 :,
-                y:y + PATCH_SIZE,
-                x:x + PATCH_SIZE,
+                y:min(y + PATCH_SIZE, height),
+                x:min(x + PATCH_SIZE, width),
             ]
 
-            patches.append(patch)
-            positions.append((y, x))
+            original_h = patch.shape[1]
+            original_w = patch.shape[2]
 
-    print(
-        f"Scene size: {height}x{width}"
-    )
+            padded = np.zeros(
+                (2, PATCH_SIZE, PATCH_SIZE),
+                dtype=np.float32,
+            )
 
-    print(
-        f"Total patches: {len(patches)}"
-    )
+            padded[
+                :,
+                :original_h,
+                :original_w,
+            ] = patch
+
+            patches.append(padded)
+
+            positions.append(
+                (
+                    y,
+                    x,
+                    original_h,
+                    original_w,
+                )
+            )
 
     for start in range(
         0,
@@ -149,10 +142,8 @@ def run_full_scene(
 
         with torch.no_grad():
 
-            logits = model(batch)
-
             probabilities = torch.sigmoid(
-                logits
+                model(batch)
             )
 
         probabilities = (
@@ -165,21 +156,29 @@ def run_full_scene(
             probabilities
         ):
 
-            y, x = positions[
-                start + i
-            ]
+            (
+                y,
+                x,
+                original_h,
+                original_w,
+            ) = positions[start + i]
 
             probability_map[
-                y:y + PATCH_SIZE,
-                x:x + PATCH_SIZE,
-            ] = probability
+                y:y + original_h,
+                x:x + original_w,
+            ] = probability[
+                :original_h,
+                :original_w,
+            ]
 
     return probability_map
 
 
 def extract_timestamp(metadata):
-
-    tags = metadata["tags"]
+    tags = metadata.get(
+        "tags",
+        {},
+    )
 
     possible_keys = [
         "ACQUISITION_DATETIME",
@@ -193,21 +192,22 @@ def extract_timestamp(metadata):
     for key in possible_keys:
 
         if key in tags:
+            return tags[key]
 
-            return tags[key], "satellite_metadata"
-
-    return None, "unavailable"
+    return None
 
 
 def main():
 
     if len(sys.argv) != 2:
 
-        raise SystemExit(
-            "\nUsage:\n"
+        print(
+            "Usage:\n"
             "python -m satellite.inference.infer_real_scene "
-            "<image_path>\n"
+            "<path_to_georeferenced_sentinel1.tif>"
         )
+
+        sys.exit(1)
 
     image_path = Path(
         sys.argv[1]
@@ -216,7 +216,8 @@ def main():
     if not image_path.exists():
 
         raise FileNotFoundError(
-            f"Image not found:\n{image_path}"
+            f"Input GeoTIFF not found:\n"
+            f"{image_path.resolve()}"
         )
 
     device = torch.device(
@@ -225,77 +226,100 @@ def main():
         else "cpu"
     )
 
+    print()
+    print("=" * 70)
+    print("P1 SATELLITE OIL-SPILL INFERENCE")
+    print("=" * 70)
+
     print(
-        f"Device: {device}"
+        f"Input       : {image_path}"
     )
 
-    if device.type == "cuda":
+    print(
+        f"Device      : {device}"
+    )
 
-        print(
-            f"GPU: "
-            f"{torch.cuda.get_device_name(0)}"
-        )
+    print(
+        f"Model       : {MODEL_PATH}"
+    )
+
+    print(
+        f"Threshold   : {THRESHOLD}"
+    )
+
+    print(
+        f"Min pixels  : {MIN_PIXELS}"
+    )
 
     if not MODEL_PATH.exists():
 
         raise FileNotFoundError(
-            f"Model not found:\n{MODEL_PATH}"
+            f"Model checkpoint not found:\n"
+            f"{MODEL_PATH.resolve()}"
         )
 
-    print(
-        f"\nLoading model:\n{MODEL_PATH}"
-    )
+    # --------------------------------------------------------
+    # Load Experiment 1 model
+    # --------------------------------------------------------
 
     model = load_model(
         MODEL_PATH,
         device,
     )
 
-    print(
-        "Model loaded successfully."
-    )
-
-    print(
-        f"\nLoading Sentinel-1 scene:\n"
-        f"{image_path}"
-    )
+    # --------------------------------------------------------
+    # Load georeferenced Sentinel-1 SAR scene
+    # --------------------------------------------------------
 
     image, metadata = load_scene(
         image_path
     )
 
+    print()
     print(
-        f"Image shape: {image.shape}"
+        f"Scene size  : "
+        f"{metadata['width']} x "
+        f"{metadata['height']}"
     )
 
     print(
-        f"CRS: {metadata['crs']}"
+        f"Bands       : "
+        f"{metadata['count']}"
     )
 
     print(
-        f"Bounds: {metadata['bounds']}"
-    )
-
-    timestamp, provenance = (
-        extract_timestamp(metadata)
+        f"CRS         : "
+        f"{metadata['crs']}"
     )
 
     print(
-        f"Timestamp: "
+        f"Bounds      : "
+        f"{metadata['bounds']}"
+    )
+
+    timestamp = extract_timestamp(
+        metadata
+    )
+
+    print(
+        f"Timestamp   : "
         f"{timestamp if timestamp else 'Unavailable'}"
     )
 
-    print(
-        f"Timestamp provenance: {provenance}"
-    )
+    # --------------------------------------------------------
+    # SAR preprocessing
+    # --------------------------------------------------------
 
     normalized = normalize_sar(
         image
     )
 
-    print(
-        "SAR normalization complete."
-    )
+    # --------------------------------------------------------
+    # U-Net inference
+    # --------------------------------------------------------
+
+    print()
+    print("Running U-Net inference...")
 
     probability_map = run_full_scene(
         model=model,
@@ -303,95 +327,109 @@ def main():
         device=device,
     )
 
-    binary_mask = (
-        probability_map >= THRESHOLD
-    ).astype(np.uint8)
-
-    predicted_pixels = int(
-        binary_mask.sum()
-    )
-
-    total_pixels = binary_mask.size
-
-    percentage = (
-        100.0
-        * predicted_pixels
-        / total_pixels
-    )
-
-    print("\n" + "=" * 60)
-    print("REAL SCENE INFERENCE")
-    print("=" * 60)
-
     print(
-        f"Scene                 : "
-        f"{image_path.stem}"
-    )
-
-    print(
-        f"Threshold             : "
-        f"{THRESHOLD:.2f}"
-    )
-
-    print(
-        f"Maximum probability   : "
+        f"Probability range: "
+        f"{probability_map.min():.4f} - "
         f"{probability_map.max():.4f}"
     )
 
+    # --------------------------------------------------------
+    # Geographic spill geometry
+    # --------------------------------------------------------
+
+    print()
     print(
-        f"Mean probability      : "
-        f"{probability_map.mean():.4f}"
+        "Extracting geographic spill geometry..."
     )
 
-    print(
-        f"Predicted oil pixels  : "
-        f"{predicted_pixels:,}"
+    geometry_result = extract_geographic_geometry(
+        probability_map=probability_map,
+        transform=metadata["transform"],
+        threshold=THRESHOLD,
+        min_pixels=MIN_PIXELS,
     )
 
-    print(
-        f"Predicted image area  : "
-        f"{percentage:.4f}%"
+    # --------------------------------------------------------
+    # Detection gate
+    # --------------------------------------------------------
+
+    if not geometry_result.get(
+        "spill_detected",
+        False,
+    ):
+
+        print()
+        print("=" * 70)
+        print("NO OIL SPILL DETECTED")
+        print("=" * 70)
+
+        print(
+            "Attribution pipeline should stop."
+        )
+
+        OUTPUT_DIR.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        mask = (
+            probability_map >= THRESHOLD
+        ).astype(np.uint8)
+
+        np.save(
+            OUTPUT_DIR
+            / f"{image_path.stem}_oil_mask.npy",
+            mask,
+        )
+
+        np.save(
+            OUTPUT_DIR
+            / f"{image_path.stem}_oil_probability.npy",
+            probability_map,
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # Build P1 shared SpillResult
+    # --------------------------------------------------------
+
+    spill_result = build_spill_result(
+        geometry_result=geometry_result,
+        spill_id=image_path.stem,
     )
 
-    print(
-        f"CRS                   : "
-        f"{metadata['crs']}"
-    )
+    # --------------------------------------------------------
+    # Save outputs
+    # --------------------------------------------------------
 
-    print(
-        f"Timestamp             : "
-        f"{timestamp if timestamp else 'Unavailable'}"
-    )
-
-    print(
-        f"Timestamp provenance  : "
-        f"{provenance}"
-    )
-
-    print("=" * 60)
-
-    output_dir = Path(
-        "real_scene_output"
-    )
-
-    output_dir.mkdir(
+    OUTPUT_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
+    mask = (
+        probability_map >= THRESHOLD
+    ).astype(np.uint8)
+
     mask_path = (
-        output_dir
+        OUTPUT_DIR
         / f"{image_path.stem}_oil_mask.npy"
     )
 
     probability_path = (
-        output_dir
+        OUTPUT_DIR
         / f"{image_path.stem}_oil_probability.npy"
+    )
+
+    result_path = (
+        OUTPUT_DIR
+        / f"{image_path.stem}_spill_result.json"
     )
 
     np.save(
         mask_path,
-        binary_mask,
+        mask,
     )
 
     np.save(
@@ -399,24 +437,93 @@ def main():
         probability_map,
     )
 
+    save_spill_result(
+        spill_result,
+        result_path,
+    )
+
+    # --------------------------------------------------------
+    # Final P1 output
+    # --------------------------------------------------------
+
+    print()
+    print("=" * 70)
+    print("P1 SPILL DETECTED")
+    print("=" * 70)
+
     print(
-        f"\nSaved oil mask:\n{mask_path}"
+        f"Spill ID    : "
+        f"{spill_result.spill_id}"
     )
 
     print(
-        f"\nSaved probability map:\n"
-        f"{probability_path}"
+        f"Centroid    : "
+        f"{spill_result.centroid.latitude:.6f}, "
+        f"{spill_result.centroid.longitude:.6f}"
     )
 
     print(
-        "\nNext step:"
+        f"Area        : "
+        f"{spill_result.spill_area_km2:.6f} km2"
+    )
+
+    if spill_result.perimeter_km is not None:
+
+        print(
+            f"Perimeter   : "
+            f"{spill_result.perimeter_km:.6f} km"
+        )
+
+    else:
+
+        print(
+            "Perimeter   : None"
+        )
+
+    print(
+        f"Confidence  : "
+        f"{spill_result.confidence:.4f}"
     )
 
     print(
-        "Pass the binary mask + georeferenced "
-        "metadata to the P1 geographic geometry "
-        "pipeline to generate the SpillResult JSON."
+        f"Timestamp   : "
+        f"{spill_result.detection_timestamp}"
     )
+
+    print(
+        f"Provenance  : "
+        f"{spill_result.timestamp_provenance}"
+    )
+
+    print(
+        f"Geometry    : "
+        f"{spill_result.geometry.get('type')}"
+    )
+
+    print()
+    print("Saved:")
+
+    print(
+        f"  Mask        : "
+        f"{mask_path.resolve()}"
+    )
+
+    print(
+        f"  Probability : "
+        f"{probability_path.resolve()}"
+    )
+
+    print(
+        f"  SpillResult : "
+        f"{result_path.resolve()}"
+    )
+
+    print()
+    print(
+        "P1 output is ready for downstream processing."
+    )
+
+    print("=" * 70)
 
 
 if __name__ == "__main__":
